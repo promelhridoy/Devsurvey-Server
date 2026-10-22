@@ -28,8 +28,10 @@ describe('POST /api/research/responses (with database)', () => {
       fixTime: '2_8h',
       tools: ['manual_testing', 'automated_tests_ci'],
       biggestDifficulty: 'finding_changes',
-      followUpConsent: 'yes',
-      contactEmail: 'dev@example.com',
+      apiSource: 'both',
+changeFrequency: 'weekly',
+breakFrequency: 'sometimes',
+toolUsefulness: '4',
     });
     expect(docs[0].createdAt).toBeInstanceOf(Date);
     expect(docs[0].updatedAt).toBeInstanceOf(Date);

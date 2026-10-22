@@ -2,33 +2,41 @@ import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import {
   ROLES,
   EXPERIENCE,
+  API_SOURCE,
+  CHANGE_FREQUENCY,
   API_PROBLEM,
   FIX_TIME,
+  BREAK_FREQUENCY,
   TOOLS,
   DIFFICULTY,
-  FOLLOW_UP,
+  USEFULNESS,
   LIMITS,
   type Role,
   type Experience,
+  type ApiSource,
+  type ChangeFrequency,
   type ApiProblem,
   type FixTime,
+  type BreakFrequency,
   type Tool,
   type Difficulty,
-  type FollowUp,
+  type Usefulness,
 } from '../constants/survey';
 
 export interface IResearchResponse {
-  submissionId?: string; // client-generated UUID used only for idempotency (retry/double-click protection)
+  submissionId?: string;
   role: Role;
   experience: Experience;
+  apiSource: ApiSource;
+  changeFrequency: ChangeFrequency;
   apiProblem: ApiProblem;
   recentProblem?: string;
   fixTime?: FixTime;
+  breakFrequency: BreakFrequency;
   tools: Tool[];
   biggestDifficulty: Difficulty;
+  toolUsefulness: Usefulness;
   desiredImprovement?: string;
-  followUpConsent: FollowUp;
-  contactEmail?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +48,8 @@ const schema = new Schema<IResearchResponse>(
     submissionId: { type: String, unique: true, sparse: true, select: false },
     role: { type: String, enum: ROLES, required: true },
     experience: { type: String, enum: EXPERIENCE, required: true },
+    apiSource: { type: String, enum: API_SOURCE, required: true },
+    changeFrequency: { type: String, enum: CHANGE_FREQUENCY, required: true },
     apiProblem: { type: String, enum: API_PROBLEM, required: true },
     recentProblem: { type: String, trim: true, maxlength: LIMITS.longText },
     fixTime: {
@@ -49,6 +59,7 @@ const schema = new Schema<IResearchResponse>(
         return this.apiProblem === 'yes';
       },
     },
+    breakFrequency: { type: String, enum: BREAK_FREQUENCY, required: true },
     tools: {
       type: [{ type: String, enum: TOOLS }],
       validate: [
@@ -63,20 +74,8 @@ const schema = new Schema<IResearchResponse>(
       ],
     },
     biggestDifficulty: { type: String, enum: DIFFICULTY, required: true },
+    toolUsefulness: { type: String, enum: USEFULNESS, required: true },
     desiredImprovement: { type: String, trim: true, maxlength: LIMITS.longText },
-    followUpConsent: { type: String, enum: FOLLOW_UP, required: true },
-    contactEmail: {
-      type: String,
-      trim: true,
-      lowercase: true,
-      maxlength: LIMITS.email,
-      validate: {
-        validator: function (this: unknown, v?: string) {
-          return !v || (this as IResearchResponse).followUpConsent === 'yes';
-        },
-        message: 'Contact email is only allowed when follow-up consent is "yes"',
-      },
-    },
   },
   { timestamps: true },
 );

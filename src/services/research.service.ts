@@ -3,33 +3,34 @@ import { ResearchResponse, type IResearchResponse } from '../models/ResearchResp
 import {
   ROLES,
   EXPERIENCE,
+  API_SOURCE,
+  CHANGE_FREQUENCY,
   API_PROBLEM,
+  BREAK_FREQUENCY,
   TOOLS,
   DIFFICULTY,
+  USEFULNESS,
   LABELS,
 } from '../constants/survey';
 import type { ExportQuery, ListQuery, SubmissionInput } from '../validators/research.validator';
 import { ApiError } from '../utils/errors';
 import { toCsv } from '../utils/csv';
 
-type Filters = Pick<ListQuery, 'role' | 'experience' | 'apiProblem' | 'followUpConsent' | 'from' | 'to' | 'q'>;
+type Filters = Pick<ListQuery, 'role' | 'experience' | 'apiProblem' | 'from' | 'to' | 'q'>;
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Build the MongoDB filter from validated query parameters. */
 export function buildFilter(f: Filters): QueryFilter<IResearchResponse> {
   const filter: QueryFilter<IResearchResponse> = {};
   if (f.role) filter.role = f.role;
   if (f.experience) filter.experience = f.experience;
   if (f.apiProblem) filter.apiProblem = f.apiProblem;
-  if (f.followUpConsent) filter.followUpConsent = f.followUpConsent;
 
   if (f.from || f.to) {
     const range: { $gte?: Date; $lt?: Date } = {};
     if (f.from) range.$gte = new Date(f.from);
     if (f.to) {
       const end = new Date(f.to);
-      // A date-only value means "through the end of that day".
       if (/^\d{4}-\d{2}-\d{2}$/.test(f.to)) end.setUTCDate(end.getUTCDate() + 1);
       range.$lt = end;
     }
@@ -44,13 +45,12 @@ export function buildFilter(f: Filters): QueryFilter<IResearchResponse> {
   return filter;
 }
 
-/** Store one submission. A repeated submissionId (retry / double click) is treated as success. */
 export async function createResponse(input: SubmissionInput): Promise<void> {
   try {
     await ResearchResponse.create(input);
   } catch (err) {
     const e = err as { code?: number };
-    if (e.code === 11000 && input.submissionId) return; // idempotent duplicate
+    if (e.code === 11000 && input.submissionId) return;
     throw err;
   }
 }
@@ -67,11 +67,15 @@ const toBuckets = <K extends string>(keys: readonly K[], labels: Record<K, strin
 
 export async function getStats() {
   const [facet] = await ResearchResponse.aggregate<{
-    totals: { total: number; problemYes: number; followUpYes: number }[];
+    totals: { total: number; problemYes: number }[];
     byRole: CountRow[];
     byExperience: CountRow[];
+    byApiSource: CountRow[];
+    byChangeFrequency: CountRow[];
     byApiProblem: CountRow[];
+    byBreakFrequency: CountRow[];
     byDifficulty: CountRow[];
+    byUsefulness: CountRow[];
     tools: CountRow[];
   }>([
     {
@@ -82,32 +86,38 @@ export async function getStats() {
               _id: null,
               total: { $sum: 1 },
               problemYes: { $sum: { $cond: [{ $eq: ['$apiProblem', 'yes'] }, 1, 0] } },
-              followUpYes: { $sum: { $cond: [{ $eq: ['$followUpConsent', 'yes'] }, 1, 0] } },
             },
           },
         ],
         byRole: [{ $group: { _id: '$role', count: { $sum: 1 } } }],
         byExperience: [{ $group: { _id: '$experience', count: { $sum: 1 } } }],
+        byApiSource: [{ $group: { _id: '$apiSource', count: { $sum: 1 } } }],
+        byChangeFrequency: [{ $group: { _id: '$changeFrequency', count: { $sum: 1 } } }],
         byApiProblem: [{ $group: { _id: '$apiProblem', count: { $sum: 1 } } }],
+        byBreakFrequency: [{ $group: { _id: '$breakFrequency', count: { $sum: 1 } } }],
         byDifficulty: [{ $group: { _id: '$biggestDifficulty', count: { $sum: 1 } } }],
+        byUsefulness: [{ $group: { _id: '$toolUsefulness', count: { $sum: 1 } } }],
         tools: [{ $unwind: '$tools' }, { $group: { _id: '$tools', count: { $sum: 1 } } }],
       },
     },
   ]);
 
-  const t = facet.totals[0] ?? { total: 0, problemYes: 0, followUpYes: 0 };
+  const t = facet.totals[0] ?? { total: 0, problemYes: 0 };
   const byCountDesc = <T extends { count: number }>(arr: T[]) => [...arr].sort((a, b) => b.count - a.count);
 
   return {
     totalSubmissions: t.total,
     problemYes: t.problemYes,
     problemYesPercent: t.total ? Math.round((t.problemYes / t.total) * 1000) / 10 : 0,
-    followUpYes: t.followUpYes,
     byRole: toBuckets(ROLES, LABELS.role, facet.byRole),
     byExperience: toBuckets(EXPERIENCE, LABELS.experience, facet.byExperience),
+    byApiSource: toBuckets(API_SOURCE, LABELS.apiSource, facet.byApiSource),
+    byChangeFrequency: toBuckets(CHANGE_FREQUENCY, LABELS.changeFrequency, facet.byChangeFrequency),
     byApiProblem: toBuckets(API_PROBLEM, LABELS.apiProblem, facet.byApiProblem),
+    byBreakFrequency: toBuckets(BREAK_FREQUENCY, LABELS.breakFrequency, facet.byBreakFrequency),
     tools: byCountDesc(toBuckets(TOOLS, LABELS.tools, facet.tools)),
     difficulties: byCountDesc(toBuckets(DIFFICULTY, LABELS.difficulty, facet.byDifficulty)),
+    byUsefulness: toBuckets(USEFULNESS, LABELS.usefulness, facet.byUsefulness),
     note:
       'These are counts of submissions. The survey is anonymous, so they cannot be treated as counts of unique people.',
   };
@@ -119,7 +129,7 @@ const toListItem = (d: IResearchResponse & { _id: unknown }) => ({
   role: d.role,
   experience: d.experience,
   apiProblem: d.apiProblem,
-  followUpConsent: d.followUpConsent,
+  toolUsefulness: d.toolUsefulness,
 });
 
 export async function listResponses(query: ListQuery) {
@@ -130,7 +140,7 @@ export async function listResponses(query: ListQuery) {
       .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(query.limit)
-      .select('role experience apiProblem followUpConsent createdAt')
+      .select('role experience apiProblem toolUsefulness createdAt')
       .lean(),
     ResearchResponse.countDocuments(filter),
   ]);
@@ -153,54 +163,60 @@ export async function getResponseById(id: string) {
     updatedAt: d.updatedAt,
     role: d.role,
     experience: d.experience,
+    apiSource: d.apiSource,
+    changeFrequency: d.changeFrequency,
     apiProblem: d.apiProblem,
     recentProblem: d.recentProblem ?? null,
     fixTime: d.fixTime ?? null,
+    breakFrequency: d.breakFrequency,
     tools: d.tools,
     biggestDifficulty: d.biggestDifficulty,
+    toolUsefulness: d.toolUsefulness,
     desiredImprovement: d.desiredImprovement ?? null,
-    followUpConsent: d.followUpConsent,
-    contactEmail: d.contactEmail ?? null,
   };
 }
 
 const EXPORT_LIMIT = 10000;
 
 export async function exportCsv(query: ExportQuery): Promise<string> {
-  const includeContact = query.includeContact === 'true';
-  const docs = await ResearchResponse.find(buildFilter(query)).sort({ createdAt: -1, _id: -1 }).limit(EXPORT_LIMIT).lean();
+  const docs = await ResearchResponse.find(buildFilter(query))
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(EXPORT_LIMIT)
+    .lean();
 
   const headers = [
     'id',
     'submitted_at_utc',
     'role',
     'experience',
+    'api_source',
+    'change_frequency',
     'api_problem',
     'recent_problem',
     'fix_time',
+    'break_frequency',
     'tools',
     'biggest_difficulty',
+    'tool_usefulness',
     'desired_improvement',
-    'follow_up_consent',
   ];
-  if (includeContact) headers.push('contact_email');
 
-  const rows = docs.map((d) => {
-    const row: unknown[] = [
-      String(d._id),
-      d.createdAt.toISOString(),
-      LABELS.role[d.role],
-      LABELS.experience[d.experience],
-      LABELS.apiProblem[d.apiProblem],
-      d.recentProblem ?? '',
-      d.fixTime ? LABELS.fixTime[d.fixTime] : '',
-      d.tools.map((t) => LABELS.tools[t]).join('; '),
-      LABELS.difficulty[d.biggestDifficulty],
-      d.desiredImprovement ?? '',
-      LABELS.followUp[d.followUpConsent],
-    ];
-    if (includeContact) row.push(d.contactEmail ?? '');
-    return row;
-  });
+  const rows = docs.map((d) => [
+    String(d._id),
+    d.createdAt.toISOString(),
+    LABELS.role[d.role],
+    LABELS.experience[d.experience],
+    LABELS.apiSource[d.apiSource],
+    LABELS.changeFrequency[d.changeFrequency],
+    LABELS.apiProblem[d.apiProblem],
+    d.recentProblem ?? '',
+    d.fixTime ? LABELS.fixTime[d.fixTime] : '',
+    LABELS.breakFrequency[d.breakFrequency],
+    d.tools.map((t) => LABELS.tools[t]).join('; '),
+    LABELS.difficulty[d.biggestDifficulty],
+    LABELS.usefulness[d.toolUsefulness],
+    d.desiredImprovement ?? '',
+  ]);
+
   return toCsv(headers, rows);
 }
